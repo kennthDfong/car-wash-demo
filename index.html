@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>CarWash</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0d1014; overflow: hidden; touch-action: none;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; -webkit-touch-callout: none; }
+  #unity-canvas { position: fixed; left: 0; top: 0; width: 100%; height: 100%; display: block; background: #0d1014; }
+  #load { position: fixed; left: 0; right: 0; top: 50%; text-align: center; color: rgba(255,255,255,.55);
+    font: 600 13px/1 -apple-system, system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<canvas id="unity-canvas" tabindex="-1"></canvas>
+<div id="load">0%</div>
+<script>
+  // 试玩记录：和网页版 src/log.js 一样，只在本机和局域网里记，?nolog、?test、自动化浏览器不记。
+  (function () {
+    var Q = new URLSearchParams(location.search);
+    var local = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname);
+    var off = !local || Q.has('nolog') || Q.has('test') || navigator.webdriver;
+    var sid = Math.random().toString(36).slice(2, 10);
+    var queue = [];
+    function flush() {
+      if (!queue.length) return;
+      var body = JSON.stringify(queue); queue = [];
+      try { navigator.sendBeacon('/log', new Blob([body], { type: 'text/plain' })); } catch (e) {}
+    }
+    window.cwLog = function (type, data) {
+      // 第一帧画出来以前一直留着「Starting…」，不然下载完到第一帧之间是黑屏，看着像卡死
+      if (type === 'u_start') { var le = document.getElementById('load'); if (le) le.remove(); }
+      if (off) return;
+      var row = { time: new Date().toISOString(), sid: sid, type: type };
+      for (var k in data) row[k] = data[k];
+      queue.push(row);
+      if (queue.length >= 20) flush();
+    };
+    if (!off) { setInterval(flush, 2000); addEventListener('pagehide', flush); }
+    // iPhone 内存不够时会把页面杀掉再自动重开；sessionStorage 在重开后还在，用它数重开了几次
+    var n = 0;
+    try { n = +(sessionStorage.getItem('cw_loads') || 0) + 1; sessionStorage.setItem('cw_loads', n); } catch (e) {}
+    window.cwLoads = n;
+  })();
+
+  // 声音：iPhone 开着静音键时网页里的声音也要能出（和 2D 版一样）；
+  // 浏览器要求「碰了屏幕以后」才放声音，所以记下游戏建的所有 AudioContext，第一次碰屏幕时把它们开起来
+  (function () {
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    var ctxs = [];
+    function Wrapped(opts) { var c = new AC(opts); ctxs.push(c); return c; }
+    Wrapped.prototype = AC.prototype;
+    window.AudioContext = Wrapped;
+    if (window.webkitAudioContext) window.webkitAudioContext = Wrapped;
+    function unlock() {
+      for (var i = 0; i < ctxs.length; i++) if (ctxs[i].state !== 'running') ctxs[i].resume().catch(function () {});
+      // iOS 有时要在碰屏幕的那一下真放一个声音才算开了：放一段极短的静音
+      for (var j = 0; j < ctxs.length; j++) {
+        try { var b = ctxs[j].createBuffer(1, 1, 22050), s = ctxs[j].createBufferSource(); s.buffer = b; s.connect(ctxs[j].destination); s.start(0); } catch (e) {}
+      }
+    }
+    ['touchend', 'pointerup', 'click', 'keydown'].forEach(function (t) { addEventListener(t, unlock, true); });
+  })();
+
+  var dpr = Math.min(window.devicePixelRatio || 1, 2); // 和网页版一样最多 2 倍
+  var loadEl = document.getElementById('load');
+  var t0 = performance.now();
+  cwLog('u_open', { loads: cwLoads, dpr: dpr, w: innerWidth, h: innerHeight, ua: navigator.userAgent });
+  // 画面大小：打开时和每次变了都记一行（查「画面只有 520 高」：窗口多高、可见区域多高、画布多高）
+  var lastSz = '';
+  function cwSize(why) {
+    var c = document.querySelector('#unity-canvas'), v = window.visualViewport;
+    var row = { why: why, w: innerWidth, h: innerHeight, vv: v ? Math.round(v.height) : null, canvas: c ? c.clientHeight : null, px: c ? c.height : null };
+    var k = JSON.stringify(row).replace(/"why":"[^"]*",/, '');
+    if (k === lastSz) return;
+    lastSz = k;
+    cwLog('u_size', row);
+  }
+  cwSize('open');
+  // 网页在不在前台（切到别的 App、锁屏、Chrome 的标签页总览时游戏不走帧）：查「下载 1 秒、第一帧 32 秒」
+  document.addEventListener('visibilitychange', function () { cwLog('u_vis', { state: document.visibilityState, ms: Math.round(performance.now()) }); });
+  addEventListener('resize', function () { clearTimeout(window.cwSzT); window.cwSzT = setTimeout(function () { cwSize('resize'); }, 300); });
+  setTimeout(function () { cwSize('5s'); }, 5000);
+  setTimeout(function () { cwSize('40s'); }, 40000);
+  var ver = "20261120.145631";
+  var s = document.createElement('script');
+  s.src = 'Build/pages.loader.js?v=' + encodeURIComponent(ver);
+  s.onload = function () {
+    createUnityInstance(document.querySelector('#unity-canvas'), {
+      arguments: [],
+      dataUrl: 'Build/pages.data.unityweb?v=' + encodeURIComponent(ver),
+      frameworkUrl: 'Build/pages.framework.js.unityweb?v=' + encodeURIComponent(ver),
+      codeUrl: 'Build/pages.wasm.unityweb?v=' + encodeURIComponent(ver),
+      streamingAssetsUrl: 'StreamingAssets',
+      companyName: "CarWash",
+      productName: "CarWash",
+      productVersion: ver,
+      devicePixelRatio: dpr,
+    }, function (p) { loadEl.textContent = Math.round(p * 100) + '%'; }).then(function (u) {
+      loadEl.textContent = 'Starting…';
+      window.unityInstance = u;
+      // 下载和启动一共用了多久（从打开网页算）；第一帧画出来的时间由游戏里记（u_start）
+      cwLog('u_load', { ms: Math.round(performance.now()), scriptMs: Math.round(performance.now() - t0), loads: cwLoads });
+    }).catch(function (e) {
+      loadEl.textContent = "Couldn't load: " + e;
+      cwLog('u_error', { msg: String(e), loads: cwLoads });
+    });
+  };
+  document.body.appendChild(s);
+</script>
+</body>
+</html>
